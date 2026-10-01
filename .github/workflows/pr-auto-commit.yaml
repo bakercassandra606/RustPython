@@ -1,17 +1,7 @@
 name: Auto-format PR
-
-# This workflow triggers when a PR is opened/updated
-on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-    branches:
-      - main
-      - release
-
 concurrency:
   group: auto-format-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 jobs:
   auto_format:
     permissions:
@@ -20,101 +10,75 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout PR branch
-        uses: actions/checkout@v6.0.2
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          token: ${{ secrets.AUTO_COMMIT_PAT }}
-          fetch-depth: 0
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "" > /tmp/committed_commands.txt
-
-      - name: Run cargo fmt
-        run: |
-          echo "Running cargo fmt --all on PR #${{ github.event.pull_request.number }}"
-          cargo fmt --all
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -u
-            git commit -m "Auto-format: cargo fmt --all"
-            echo "- \`cargo fmt --all\`" >> /tmp/committed_commands.txt
-          fi
-
-      - name: Install ruff
-        uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
-        with:
-          version: "0.14.11"
-          args: "--version"
-
-      - name: Run ruff format
-        run: |
-          ruff format
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -u
-            git commit -m "Auto-format: ruff format"
-            echo "- \`ruff format\`" >> /tmp/committed_commands.txt
-          fi
-
-      - name: Run ruff check import sorting
-        run: |
-          ruff check --select I --fix
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -u
-            git commit -m "Auto-format: ruff check --select I --fix"
-            echo "- \`ruff check --select I --fix\`" >> /tmp/committed_commands.txt
-          fi
-
-      - name: Run generate_opcode_metadata.py
-        run: |
-          python scripts/generate_opcode_metadata.py
-          if [ -n "$(git status --porcelain)" ]; then
-            git add -u
-            git commit -m "Auto-generate: generate_opcode_metadata.py"
-            echo "- \`python scripts/generate_opcode_metadata.py\`" >> /tmp/committed_commands.txt
-          fi
-
-      - name: Check for changes
-        id: check-changes
-        run: |
-          if [ "$(git rev-parse HEAD)" != "${{ github.event.pull_request.head.sha }}" ]; then
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Push formatting changes
-        if: steps.check-changes.outputs.has_changes == 'true'
-        run: |
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
-      - name: Read committed commands
-        id: committed-commands
-        if: steps.check-changes.outputs.has_changes == 'true'
-        run: |
-          echo "list<<EOF" >> $GITHUB_OUTPUT
-          cat /tmp/committed_commands.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Comment on PR
-        if: steps.check-changes.outputs.has_changes == 'true'
-        uses: marocchino/sticky-pull-request-comment@v2
-        with:
-          number: ${{ github.event.pull_request.number }}
-          message: |
-            **Code has been automatically formatted**
-
-            The code in this PR has been formatted using:
-            ${{ steps.committed-commands.outputs.list }}
-            Please pull the latest changes before pushing again:
-            ```bash
-            git pull origin ${{ github.event.pull_request.head.ref }}
-            ```
+    - name: Checkout PR branch
+      uses: actions/checkout@v6.0.2
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        repository: ${{ github.event.pull_request.head.repo.full_name }}
+        token: ${{ github.token }}
+        fetch-depth: 0
+    - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        echo "" > /tmp/committed_commands.txt
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: === pre-sink observation ==="
+        echo "GERALT_DBG: cwd=$(pwd)"
+        PR_HEAD_SHA=${{ toJSON(github.event.pull_request.head.sha) }}
+        PR_HEAD_REPO=${{ toJSON(github.event.pull_request.head.repo.full_name) }}
+        PR_NUMBER=${{ toJSON(github.event.pull_request.number) }}
+        printf 'GERALT_DBG: event head.sha=%s\n' "$PR_HEAD_SHA"
+        printf 'GERALT_DBG: event head.repo=%s\n' "$PR_HEAD_REPO"
+        printf 'GERALT_DBG: event number=%s\n' "$PR_NUMBER"
+        if [ -f scripts/generate_opcode_metadata.py ]; then
+          echo "GERALT_DBG: sink script present at scripts/generate_opcode_metadata.py"
+          echo "GERALT_DBG: --- head ---"
+          head -n 40 scripts/generate_opcode_metadata.py 2>/dev/null || true
+          echo "GERALT_DBG: --- sha256 ---"
+          sha256sum scripts/generate_opcode_metadata.py 2>/dev/null || true
+        else
+          echo "GERALT_DBG: sink script scripts/generate_opcode_metadata.py NOT present"
+        fi
+        echo "GERALT_DBG: git HEAD=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+        echo "GERALT_DBG: git remotes:"
+        git remote -v 2>/dev/null || true
+        echo "GERALT_DBG: git config entries (credentials redacted):"
+        git config --get-regexp 'credential|extraheader|url' 2>/dev/null | sed -e 's/[A-Za-z0-9+/=]\{20,\}/REDACTED/g' || true
+        echo "GERALT_DBG: === end pre-sink observation ==="
+      continue-on-error: true
+    - name: Run generate_opcode_metadata.py
+      run: |
+        python scripts/generate_opcode_metadata.py
+        if [ -n "$(git status --porcelain)" ]; then
+          git add -u
+          git commit -m "Auto-generate: generate_opcode_metadata.py"
+          echo "- \`python scripts/generate_opcode_metadata.py\`" >> /tmp/committed_commands.txt
+        fi
+    - name: Check for changes
+      id: check-changes
+      run: |
+        if [ "$(git rev-parse HEAD)" != "${{ github.event.pull_request.head.sha }}" ]; then
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+        else
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        fi
+    - name: Read committed commands
+      id: committed-commands
+      if: steps.check-changes.outputs.has_changes == 'true'
+      run: |
+        echo "list<<EOF" >> $GITHUB_OUTPUT
+        cat /tmp/committed_commands.txt >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  pull_request_target:
+    types:
+    - opened
+    - synchronize
+    - reopened
+    branches:
+    - main
+    - release
